@@ -1,0 +1,131 @@
+from RPLCD.i2c import CharLCD import sys import termios import tty import mysql.connector import serial import time 
+ 
+# ================= LCD SETUP ================= 
+lcd = CharLCD('PCF8574', 0x27) 
+ 
+# ================= DATABASE CONNECTION ================= 
+db = mysql.connector.connect( 
+    host="localhost",     user="votinguser",     password="voting123", 
+    database="BIOBALLOT" 
+) 
+cursor = db.cursor() 
+ 
+# ================= KEY INPUT FUNCTION ================= 
+def getch(): 
+    fd = sys.stdin.fileno()     old_settings = termios.tcgetattr(fd) 
+    try: 
+        tty.setraw(fd)         ch = sys.stdin.read(1)     finally: 
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)     return ch 
+ 
+ 
+# ================= MAIN LOOP ================= 
+while True: 
+ 
+    lcd.clear()     lcd.write_string("Enter Voter ID:")     voter_id = ""     lcd.cursor_pos = (1, 0) 
+ 
+    # ----------- READ VOTER ID -----------     while True:         char = getch() 
+ 
+        if char == '\r': 
+            break 
+ 
+        elif char == '\x7f':             if len(voter_id) > 0: 
+                voter_id = voter_id[:-1]                 lcd.cursor_pos = (1, 0)                 lcd.write_string(" " * 16)                 lcd.cursor_pos = (1, 0)                 lcd.write_string(voter_id) 
+ 
+        else:             if len(voter_id) < 16:                 voter_id += char                 lcd.write_string(char) 
+ 
+    lcd.clear()     lcd.write_string("Checking...")     time.sleep(1) 
+ 
+    # ----------- CHECK VOTER EXISTS ----------- 
+    cursor.execute("SELECT AADHAR_ID FROM VOTER WHERE VOTER_ID=%s", 
+(voter_id,))     result = cursor.fetchone() 
+ 
+    if not result:         lcd.clear() 
+        lcd.write_string("Invalid Voter")         time.sleep(3)         continue 
+ 
+    aadhar_id = result[0] 
+ 
+    # ----------- GET FINGERPRINT ID ----------- 
+    cursor.execute("SELECT FINGERPRINT FROM AADHAR WHERE AADHAR_ID=%s", 
+(aadhar_id,))     fp_result = cursor.fetchone() 
+ 
+    if not fp_result:         lcd.clear()         lcd.write_string("FP Not Found")         time.sleep(3)         continue 
+ 
+    finger_id = fp_result[0] 
+ 
+    # ----------- CHECK IF ALREADY VOTED ----------- 
+    cursor.execute("SELECT 	HAS_VERIFIED 	FROM 	ACTIVITY_LOG 	WHERE 
+VOTER_ID=%s", (voter_id,)) 
+    status = cursor.fetchone() 
+ 
+    if not status:         lcd.clear() 
+        lcd.write_string("Not Registered")         time.sleep(3)         continue 
+ 
+    if status[0] != 0:         lcd.clear() 
+        lcd.write_string("Already Voted") 
+         try: 
+            ser = serial.Serial('/dev/ttyACM0', 9600, timeout=2)             time.sleep(2) 
+            ser.write(b"ALREADY_VOTED\n") 
+            ser.close()         except:             pass 
+ 
+        time.sleep(3)         continue 
+ 
+    # ----------- FINGERPRINT VERIFICATION ----------- 
+    try: 
+        ser = serial.Serial('/dev/ttyACM0', 9600, timeout=5)         time.sleep(2) 
+ 
+        lcd.clear()         lcd.write_string("Place Finger") 
+ 
+        ser.write((str(finger_id) + "\n").encode()) 
+ 
+        match_success = False 
+        proceed_pressed = False 
+ 
+        while True: 
+            response = ser.readline().decode().strip() 
+ 
+            if response: 
+                print("Arduino:", response) 
+ 
+            if response == "Place Finger...":                 lcd.clear()                 lcd.write_string("Place Finger") 
+ 
+            elif response == "MATCH":                 match_success = True 
+                lcd.clear()                 lcd.write_string("Eligible")                 lcd.cursor_pos = (1, 0)                 lcd.write_string("Press Button") 
+ 
+            elif response == "PROCEED": 
+                proceed_pressed = True 
+                break 
+ 
+            elif response in ["NO_MATCH", "WRONG_PERSON", "FP_ERROR"]: 
+                break 
+ 
+        ser.close() 
+ 
+        if not match_success: 
+            lcd.clear()             lcd.write_string("FP Failed")             time.sleep(3) 
+            continue 
+ 
+        if not proceed_pressed: 
+            lcd.clear()             lcd.write_string("Button Needed") 
+            time.sleep(3)             continue 
+ 
+    except Exception as e: 
+        lcd.clear()         lcd.write_string("FP Error") 
+        print(e)         time.sleep(3)         continue 
+ 
+    # ----------- IF ALL TESTS PASS -----------     lcd.clear() 
+    lcd.write_string("Vote Recording")     time.sleep(1) 
+ 
+    cursor.execute(""" 
+        UPDATE ACTIVITY_LOG  
+        SET HAS_VERIFIED=1, PLACE=%s, TIME=NOW() 
+        WHERE VOTER_ID=%s 
+    """, ("Booth1", voter_id))     db.commit() 
+ 
+    lcd.clear() 
+    lcd.write_string("Vote Recorded")     time.sleep(3) 
+ 
+    # ----------- AUTO RESET FOR NEXT USER -----------     for i in range(10, 0, -1): 
+        lcd.clear() 
+        lcd.write_string("Next User in")         lcd.cursor_pos = (1, 0)         lcd.write_string(str(i) + " Sec")         time.sleep(1) 
+ 
+    lcd.clear()
