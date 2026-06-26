@@ -1,0 +1,103 @@
+#include <Adafruit_Fingerprint.h> 
+#include <SoftwareSerial.h> 
+ 
+#define RX 2 
+#define TX 3 
+#define SENSOR_PWR 4 
+ 
+#define GREEN_ELIGIBLE 7 
+#define RED_NOT_ELIGIBLE 8 
+#define BUTTON_PIN 6 
+ 
+SoftwareSerial fingerSerial(RX, TX); 
+Adafruit_Fingerprint finger(&fingerSerial); 
+ 
+int templateID = 0; bool eligible = false; 
+ 
+void setup() {   Serial.begin(9600);   fingerSerial.begin(57600); 
+ 
+  pinMode(SENSOR_PWR, OUTPUT);   pinMode(GREEN_ELIGIBLE, OUTPUT);   pinMode(RED_NOT_ELIGIBLE, OUTPUT);   pinMode(BUTTON_PIN, INPUT_PULLUP); 
+ 
+  digitalWrite(SENSOR_PWR, LOW);   digitalWrite(GREEN_ELIGIBLE, LOW);   digitalWrite(RED_NOT_ELIGIBLE, LOW); 
+ 
+  delay(1000); 
+ 
+  digitalWrite(SENSOR_PWR, HIGH); 
+  delay(500); 
+ 
+  if (finger.verifyPassword()) { 
+    Serial.println("Sensor Found!"); 
+  } else { 
+    Serial.println("NO_SENSOR"); 
+    while (1); 
+  } 
+ 
+  digitalWrite(SENSOR_PWR, LOW); 
+} 
+ 
+void loop() { 
+ 
+  // ===== SERIAL COMMAND CHECK ===== 
+  if (Serial.available()) { 
+ 
+    String cmd = Serial.readStringUntil('\n');     cmd.trim(); 
+ 
+    // ===== ALREADY VOTED CASE ===== 
+    if (cmd == "ALREADY_VOTED") { 
+      eligible = false; 
+ 
+      digitalWrite(GREEN_ELIGIBLE, LOW);       digitalWrite(RED_NOT_ELIGIBLE, HIGH); 
+ 
+      delay(3000);  // keep red ON 3 seconds 
+ 
+      digitalWrite(RED_NOT_ELIGIBLE, LOW); 
+      return; 
+    } 
+ 
+    // Convert to template ID     templateID = cmd.toInt();     if (templateID <= 0) return; 
+ 
+    eligible = false; 
+ 
+    digitalWrite(GREEN_ELIGIBLE, LOW);     digitalWrite(RED_NOT_ELIGIBLE, LOW); 
+ 
+    digitalWrite(SENSOR_PWR, HIGH); 
+    delay(500); 
+ 
+    Serial.println("Place Finger..."); 
+     int p;     while (true) {       p = finger.getImage();       if (p == FINGERPRINT_OK) break; 
+ 
+      if (p != FINGERPRINT_NOFINGER) {         Serial.println("FP_ERROR");         digitalWrite(SENSOR_PWR, LOW); 
+        return; 
+      } 
+      delay(300); 
+    } 
+ 
+    p = finger.image2Tz(1); 
+    if (p != FINGERPRINT_OK) {       Serial.println("FP_ERROR");       digitalWrite(SENSOR_PWR, LOW); 
+      return; 
+    } 
+ 
+    p = finger.fingerFastSearch(); 
+ 
+    if (p == FINGERPRINT_OK && finger.fingerID == templateID) { 
+ 
+      Serial.println("MATCH");       digitalWrite(GREEN_ELIGIBLE, HIGH);       digitalWrite(RED_NOT_ELIGIBLE, LOW); 
+      eligible = true; 
+ 
+      delay(3000);   // Green ON 3 sec       digitalWrite(GREEN_ELIGIBLE, LOW); 
+ 
+    } else { 
+ 
+      Serial.println("NO_MATCH");       digitalWrite(GREEN_ELIGIBLE, LOW);       digitalWrite(RED_NOT_ELIGIBLE, HIGH); 
+      eligible = false; 
+ 
+      delay(3000);   // Red ON 3 sec 
+      digitalWrite(RED_NOT_ELIGIBLE, LOW); 
+    } 
+ 
+    digitalWrite(SENSOR_PWR, LOW); 
+  } 
+ 
+  // ===== BUTTON SECTION =====   if (eligible && digitalRead(BUTTON_PIN) == LOW) {     Serial.println("PROCEED");     delay(500); // debounce 
+  } 
+}
